@@ -8,22 +8,61 @@ import sys
 st.set_page_config(layout="wide", page_title="ATP Tennis Analyzer")
 
 # -----------------------------------------
-# COLOR THEMES FOR PLAYERS (from original file)
+# COLOR THEMES FOR PLAYERS
 # -----------------------------------------
+# Predefined colors for top players
 PLAYER_COLORS = {
-    # Big names (add more if needed)
-    "Roger Federer": "#1f77b4",
-    "Rafael Nadal": "#d62728",
-    "Novak Djokovic": "#2ca02c",
-    "Andy Murray": "#9467bd",
-    "Stan Wawrinka": "#ff7f0e",
+    "Roger Federer": "#1f77b4",  # Blue
+    "Rafael Nadal": "#d62728",   # Red
+    "Novak Djokovic": "#2ca02c", # Green
+    "Andy Murray": "#9467bd",    # Purple
+    "Stan Wawrinka": "#ff7f0e",  # Orange
 }
 
-DEFAULT_COLOR = "#4e79a7"   # used when player not in dict
+# Fallback colors used when comparing players not in PLAYER_COLORS
+# These are chosen to be distinct from each other and the main colors
+FALLBACK_COLORS = [
+    "#4e79a7", # A neutral blue (used as default for single player)
+    "#f28e2b", # A yellow-orange
+    "#e15759", # A different shade of red
+    "#76b7b2", # A teal/cyan
+    "#59a14f", # A forest green
+]
+
+DEFAULT_COLOR = FALLBACK_COLORS[0]
 
 def get_player_color(player_name):
-    """Retrieves the color for a specific player."""
+    """Retrieves the color for a single player or the default color."""
     return PLAYER_COLORS.get(player_name, DEFAULT_COLOR)
+
+
+def get_comparison_colors(player1, player2):
+    """
+    Ensures two distinct colors for a comparison.
+    Prioritizes PLAYER_COLORS, but falls back to two distinct colors 
+    from FALLBACK_COLORS if needed.
+    """
+    color1 = PLAYER_COLORS.get(player1)
+    color2 = PLAYER_COLORS.get(player2)
+
+    # If both have predefined colors, use them
+    if color1 and color2:
+        return color1, color2
+
+    # If neither has a predefined color, assign the first two distinct fallbacks
+    if not color1 and not color2:
+        return FALLBACK_COLORS[0], FALLBACK_COLORS[1]
+
+    # If only one has a predefined color, assign it and find a fallback for the other
+    if color1:
+        # Player 1 has a predefined color. Find the first fallback that isn't the same.
+        fallback_color = next((c for c in FALLBACK_COLORS if c != color1), FALLBACK_COLORS[1])
+        return color1, fallback_color
+    
+    if color2:
+        # Player 2 has a predefined color. Find the first fallback that isn't the same.
+        fallback_color = next((c for c in FALLBACK_COLORS if c != color2), FALLBACK_COLORS[0])
+        return fallback_color, color2
 
 
 # -----------------------------------------
@@ -155,7 +194,7 @@ def plot_career_stats(df, player_name):
         st.info("No wins recorded in this range.")
 
 # -----------------------------------------
-# NEW COMPARISON FUNCTION
+# COMPARISON FUNCTION (Lifetime Comparison)
 # -----------------------------------------
 
 def plot_player_comparison(df, player1, player2):
@@ -208,6 +247,9 @@ def plot_player_comparison(df, player1, player2):
         st.info("No wins recorded for these players in the selected range.")
         return
 
+    # Get distinct comparison colors
+    color1, color2 = get_comparison_colors(player1, player2)
+
     # Create the grouped bar chart using Matplotlib/Seaborn
     fig, ax = plt.subplots(figsize=(10, 6))
     sns.barplot(
@@ -215,7 +257,7 @@ def plot_player_comparison(df, player1, player2):
         y='Wins', 
         hue='Player', 
         data=combined_surface_wins,
-        palette={player1: get_player_color(player1), player2: get_player_color(player2)},
+        palette={player1: color1, player2: color2}, # Use guaranteed distinct colors
         ax=ax
     )
     
@@ -247,15 +289,19 @@ def plot_h2h_trend(df, player1, player2):
     h2h_matches['P2_Cumulative_Wins'] = h2h_matches['P2_Win'].cumsum()
     h2h_matches['Match_Number'] = range(1, len(h2h_matches) + 1)
 
+    # Get distinct comparison colors
+    color1, color2 = get_comparison_colors(player1, player2)
+
+
     fig, ax = plt.subplots(figsize=(10, 6))
     
     # Plotting Player 1's cumulative wins
     ax.plot(h2h_matches['Match_Number'], h2h_matches['P1_Cumulative_Wins'], 
-            label=player1, marker='o', linestyle='-', color=get_player_color(player1), linewidth=2)
+            label=player1, marker='o', linestyle='-', color=color1, linewidth=2) # Use color1
     
     # Plotting Player 2's cumulative wins
     ax.plot(h2h_matches['Match_Number'], h2h_matches['P2_Cumulative_Wins'], 
-            label=player2, marker='s', linestyle='--', color=get_player_color(player2), linewidth=2)
+            label=player2, marker='s', linestyle='--', color=color2, linewidth=2) # Use color2
 
     ax.set_title(f"{player1} vs {player2}: Head-to-Head History", fontsize=14)
     ax.set_xlabel("Match Number (Chronological)", fontsize=12)
@@ -289,7 +335,9 @@ def plot_h2h_summary(df, player1, player2):
         # Pie Chart for H2H Wins
         labels = [player1, player2]
         sizes = [p1_wins, p2_wins]
-        colors = [get_player_color(player1), get_player_color(player2)]
+        
+        color1, color2 = get_comparison_colors(player1, player2) # Get comparison colors
+        colors = [color1, color2]
 
         fig, ax = plt.subplots(figsize=(6, 6))
         # Filter out 0 size slices for cleaner look
