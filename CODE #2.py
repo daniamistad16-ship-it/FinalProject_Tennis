@@ -34,7 +34,6 @@ def load_data():
     """Loads and preprocesses the ATP tennis dataset."""
     filename = 'atp_tennis_.csv'
     try:
-        # st.info(f"📂 Loading dataset from '{filename}'...")
         df = pd.read_csv(filename)
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         # Drop rows where date conversion failed or are incomplete
@@ -52,8 +51,54 @@ def load_data():
 # PLOTTING FUNCTIONS
 # -----------------------------------------
 
+def plot_annual_win_rate(df, player_name):
+    """Generates and displays a line chart of the player's annual win rate."""
+    st.subheader(f"{player_name}'s Annual Win Rate Trend")
+    
+    player_matches = df[(df['Player_1'] == player_name) | (df['Player_2'] == player_name)].copy()
+
+    if player_matches.empty:
+        st.info(f"No match data available for {player_name} in the selected period.")
+        return
+
+    # Calculate wins and total matches per year
+    yearly_stats = player_matches.groupby('Year').agg(
+        Total_Matches=('Date', 'count'),
+        Wins=('Winner', lambda x: (x == player_name).sum())
+    ).reset_index()
+
+    # Calculate win rate
+    yearly_stats['Win_Rate'] = (yearly_stats['Wins'] / yearly_stats['Total_Matches']) * 100
+
+    if not yearly_stats.empty:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        player_color = get_player_color(player_name)
+        
+        ax.plot(yearly_stats['Year'], yearly_stats['Win_Rate'], 
+                marker='o', linestyle='-', color=player_color, linewidth=2, markersize=6)
+        
+        ax.set_title(f"{player_name} Winning Percentage by Year", fontsize=14)
+        ax.set_xlabel("Year", fontsize=12)
+        ax.set_ylabel("Win Rate (%)", fontsize=12)
+        ax.grid(True, linestyle='--', alpha=0.6)
+        ax.set_ylim(0, 100) # Win rate is between 0 and 100
+
+        # Adjust x-axis ticks to show only integer years
+        years = yearly_stats['Year'].unique()
+        # Show a maximum of 10 ticks for readability
+        step = max(1, len(years) // 10)
+        ax.set_xticks(years[::step]) 
+        
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        st.pyplot(fig)
+    else:
+        st.info("No yearly data found to plot the trend.")
+
+
 def plot_career_stats(df, player_name):
-    """Generates and displays career statistics for a selected player."""
+    """Generates and displays career statistics for a selected player (Original and calls new trend)."""
     
     player_matches = df[(df['Player_1'] == player_name) | (df['Player_2'] == player_name)].copy()
 
@@ -73,6 +118,11 @@ def plot_career_stats(df, player_name):
     col_b.metric(label="Overall Win Rate", value=f"{win_rate:.1f}%", help=f"Total Wins: {wins}")
     
     st.markdown("---")
+    
+    # NEW CHART 1: Annual Win Rate Trend
+    plot_annual_win_rate(df, player_name)
+
+    st.markdown("---")
     st.subheader("Wins by Surface")
     
     # Count wins by surface
@@ -89,6 +139,44 @@ def plot_career_stats(df, player_name):
         st.pyplot(fig)
     else:
         st.info("No wins recorded in this range.")
+
+def plot_h2h_trend(df, player1, player2):
+    """Plots the cumulative head-to-head score over time."""
+    st.subheader(f"Historical Head-to-Head Trend ({player1} vs {player2})")
+
+    h2h_matches = df[((df['Player_1'] == player1) & (df['Player_2'] == player2)) | 
+                     ((df['Player_1'] == player2) & (df['Player_2'] == player1))].sort_values(by='Date').copy()
+
+    if h2h_matches.empty:
+        return # Handled in summary function
+    
+    # Calculate who won each match (1 if Player 1 won, 0 otherwise)
+    h2h_matches['P1_Win'] = (h2h_matches['Winner'] == player1).astype(int)
+    h2h_matches['P2_Win'] = (h2h_matches['Winner'] == player2).astype(int)
+
+    # Calculate cumulative score
+    h2h_matches['P1_Cumulative_Wins'] = h2h_matches['P1_Win'].cumsum()
+    h2h_matches['P2_Cumulative_Wins'] = h2h_matches['P2_Win'].cumsum()
+    h2h_matches['Match_Number'] = range(1, len(h2h_matches) + 1)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Plotting Player 1's cumulative wins
+    ax.plot(h2h_matches['Match_Number'], h2h_matches['P1_Cumulative_Wins'], 
+            label=player1, marker='o', linestyle='-', color=get_player_color(player1), linewidth=2)
+    
+    # Plotting Player 2's cumulative wins
+    ax.plot(h2h_matches['Match_Number'], h2h_matches['P2_Cumulative_Wins'], 
+            label=player2, marker='s', linestyle='--', color=get_player_color(player2), linewidth=2)
+
+    ax.set_title(f"{player1} vs {player2}: Head-to-Head History", fontsize=14)
+    ax.set_xlabel("Match Number (Chronological)", fontsize=12)
+    ax.set_ylabel("Cumulative Wins", fontsize=12)
+    ax.legend(loc='upper left')
+    ax.grid(True, linestyle='--', alpha=0.6)
+    plt.tight_layout()
+    st.pyplot(fig)
+
 
 def plot_h2h_summary(df, player1, player2):
     """Calculates and displays a summary and pie chart for Head-to-Head record."""
@@ -260,6 +348,11 @@ def main_app():
 
         if player1 and player2 and player1 != player2:
             plot_h2h_summary(df_filtered, player1, player2)
+            st.markdown("---")
+            
+            # NEW CHART 2: Head-to-Head Trend
+            plot_h2h_trend(df_filtered, player1, player2)
+
             st.markdown("---")
             plot_h2h_heatmap(df_filtered, player1, player2)
         elif player1 == player2:
