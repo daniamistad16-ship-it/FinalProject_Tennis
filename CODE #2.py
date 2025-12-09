@@ -1,10 +1,14 @@
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import streamlit as st
 import sys
 
+# Set Streamlit page configuration early
+st.set_page_config(layout="wide", page_title="ATP Tennis Analyzer")
+
 # -----------------------------------------
-# COLOR THEMES FOR PLAYERS
+# COLOR THEMES FOR PLAYERS (from original file)
 # -----------------------------------------
 PLAYER_COLORS = {
     # Big names (add more if needed)
@@ -17,321 +21,252 @@ PLAYER_COLORS = {
 
 DEFAULT_COLOR = "#4e79a7"   # used when player not in dict
 
+def get_player_color(player_name):
+    """Retrieves the color for a specific player."""
+    return PLAYER_COLORS.get(player_name, DEFAULT_COLOR)
+
 
 # -----------------------------------------
-# DATA LOADING
+# DATA LOADING (Adapted for Streamlit caching)
 # -----------------------------------------
+@st.cache_data
 def load_data():
+    """Loads and preprocesses the ATP tennis dataset."""
     filename = 'atp_tennis_.csv'
     try:
-        print("📂 Loading dataset...")
+        # st.info(f"📂 Loading dataset from '{filename}'...")
         df = pd.read_csv(filename)
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        # Drop rows where date conversion failed or are incomplete
+        df.dropna(subset=['Date', 'Winner', 'Player_1', 'Player_2', 'Surface', 'Round'], inplace=True)
         df['Year'] = df['Date'].dt.year
-        print("✅ Data loaded successfully!")
         return df
     except FileNotFoundError:
-        print("❌ Error: 'atp_tennis_.csv' not found.")
+        st.error(f"❌ Error: '{filename}' not found. Please ensure the file is correctly uploaded.")
+        return None
+    except Exception as e:
+        st.error(f"An error occurred during data loading: {e}")
         return None
 
+# -----------------------------------------
+# PLOTTING FUNCTIONS
+# -----------------------------------------
+
+def plot_career_stats(df, player_name):
+    """Generates and displays career statistics for a selected player."""
+    
+    player_matches = df[(df['Player_1'] == player_name) | (df['Player_2'] == player_name)].copy()
+
+    if player_matches.empty:
+        st.info(f"No matches found for {player_name} in the selected time frame ({df['Year'].min()} - {df['Year'].max()}).")
+        return
+
+    # Calculate overall win percentage
+    wins = (player_matches['Winner'] == player_name).sum()
+    total_matches = len(player_matches)
+    win_rate = (wins / total_matches) * 100 if total_matches > 0 else 0
+
+    st.subheader(f"Summary Statistics for {player_name}")
+    
+    col_a, col_b = st.columns(2)
+    col_a.metric(label="Total Matches Played", value=total_matches)
+    col_b.metric(label="Overall Win Rate", value=f"{win_rate:.1f}%", help=f"Total Wins: {wins}")
+    
+    st.markdown("---")
+    st.subheader("Wins by Surface")
+    
+    # Count wins by surface
+    surface_wins = player_matches[player_matches['Winner'] == player_name].groupby('Surface').size().sort_values(ascending=False)
+    
+    if not surface_wins.empty:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        surface_wins.plot(kind='bar', ax=ax, color=get_player_color(player_name))
+        ax.set_title(f"{player_name} Wins by Surface")
+        ax.set_ylabel("Number of Wins")
+        ax.set_xlabel("Surface")
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        st.pyplot(fig)
+    else:
+        st.info("No wins recorded in this range.")
+
+def plot_h2h_summary(df, player1, player2):
+    """Calculates and displays a summary and pie chart for Head-to-Head record."""
+    h2h_matches = df[((df['Player_1'] == player1) & (df['Player_2'] == player2)) | 
+                     ((df['Player_1'] == player2) & (df['Player_2'] == player1))].copy()
+
+    if h2h_matches.empty:
+        st.info(f"No Head-to-Head matches found between {player1} and {player2} in this range.")
+        return
+
+    p1_wins = (h2h_matches['Winner'] == player1).sum()
+    p2_wins = (h2h_matches['Winner'] == player2).sum()
+    total = len(h2h_matches)
+    
+    st.subheader("Overall Head-to-Head Record")
+    col_a, col_b, col_c = st.columns(3)
+    col_a.metric("Total Matches", total)
+    col_b.metric(f"{player1} Wins", p1_wins, delta=f"{p1_wins - p2_wins} net wins" if p1_wins > p2_wins else None)
+    col_c.metric(f"{player2} Wins", p2_wins, delta=f"{p2_wins - p1_wins} net wins" if p2_wins > p1_wins else None)
+
+    if total > 0:
+        # Pie Chart for H2H Wins
+        labels = [player1, player2]
+        sizes = [p1_wins, p2_wins]
+        colors = [get_player_color(player1), get_player_color(player2)]
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        # Filter out 0 size slices for cleaner look
+        filtered_labels = [labels[i] for i, size in enumerate(sizes) if size > 0]
+        filtered_sizes = [size for size in sizes if size > 0]
+        filtered_colors = [colors[i] for i, size in enumerate(sizes) if size > 0]
+        
+        ax.pie(filtered_sizes, labels=filtered_labels, autopct='%1.1f%%', startangle=90, colors=filtered_colors, wedgeprops={'edgecolor': 'black', 'linewidth': 1})
+        ax.axis('equal') 
+        st.pyplot(fig)
+
+def plot_h2h_heatmap(df, player1, player2):
+    """Generates the win difference heatmap by Surface and Round."""
+    st.subheader("Win Difference by Surface and Round (Heatmap)")
+    
+    h2h_matches = df[((df['Player_1'] == player1) & (df['Player_2'] == player2)) | 
+                     ((df['Player_1'] == player2) & (df['Player_2'] == player1))].copy()
+    
+    if h2h_matches.empty:
+        return # Handled in summary function
+
+    # Check for critical columns
+    if h2h_matches[['Surface', 'Round']].isnull().any().any():
+        st.warning("⚠️ Heatmap requires 'Surface' and 'Round' data, which is missing for some matches in this head-to-head.")
+        return
+
+    # Logic adapted from the user's original snippet
+    p1_wins = h2h_matches[h2h_matches['Winner'] == player1]
+    p2_wins = h2h_matches[h2h_matches['Winner'] == player2]
+    
+    # Aggregate wins by Surface and Round
+    heat1 = p1_wins.groupby(["Surface", "Round"]).size().reset_index(name="P1")
+    heat2 = p2_wins.groupby(["Surface", "Round"]).size().reset_index(name="P2")
+    
+    # Merge, fill NaN with 0
+    merged = pd.merge(heat1, heat2, on=["Surface", "Round"], how="outer").fillna(0)
+
+    # Pivot P1 and P2
+    pivot_p1 = merged.pivot(index="Surface", columns="Round", values="P1").fillna(0)
+    pivot_p2 = merged.pivot(index="Surface", columns="Round", values="P2").fillna(0)
+
+    # Align indexes/columns
+    all_surfaces = sorted(set(pivot_p1.index) | set(pivot_p2.index))
+    all_rounds = sorted(set(pivot_p1.columns) | set(pivot_p2.columns))
+
+    pivot_p1 = pivot_p1.reindex(index=all_surfaces, columns=all_rounds, fill_value=0)
+    pivot_p2 = pivot_p2.reindex(index=all_surfaces, columns=all_rounds, fill_value=0)
+
+    # Calculate difference (Player 1 Wins - Player 2 Wins)
+    diff = pivot_p1 - pivot_p2
+
+    # Plotting the heatmap
+    fig, ax = plt.subplots(figsize=(12, 8))
+    sns.heatmap(diff, 
+                cmap="coolwarm", 
+                center=0, 
+                annot=True, 
+                fmt=".0f", 
+                linewidths=.5, 
+                linecolor='lightgray',
+                cbar_kws={'label': f'Wins ({player1} - {player2})'})
+    
+    ax.set_title(f"{player1} vs {player2} – Win Difference by Surface/Round")
+    ax.set_xlabel("Round")
+    ax.set_ylabel("Surface")
+    plt.yticks(rotation=0)
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    st.pyplot(fig)
+
 
 # -----------------------------------------
-# MAIN PROGRAM
+# MAIN STREAMLIT APPLICATION
 # -----------------------------------------
-def main():
+def main_app():
+    """Main function to run the Streamlit app."""
+    
+    st.title("🎾 ATP Tennis Match Analyzer")
+    st.caption("Analyze career statistics and head-to-head records using the provided match data.")
+    
     df = load_data()
     if df is None:
         return
 
-    while True:
-        print("\n" + "="*40)
-        print(" 🎾 ATP TENNIS ANALYZER (CLI MODE)")
-        print("="*40)
+    # Extract all unique player names
+    all_players = sorted(pd.concat([df['Player_1'], df['Player_2']]).unique())
 
-        # -------------------------
-        # STEP 1: ERA SELECTION
-        # -------------------------
-        print("\n[Step 1] Select an Era:")
-        print(" 1. All Time (2000–2025)")
-        print(" 2. The 2000s (2000–2009)")
-        print(" 3. The 2010s (2010–2019)")
-        print(" 4. The 2020s (2020–Present)")
-        print(" Q. Quit")
+    # --- SIDEBAR (SELECTIONS) ---
+    st.sidebar.header("⚙️ Analysis Settings")
+    
+    # Analysis Mode Selector
+    analysis_mode = st.sidebar.radio(
+        "Choose Analysis Type:",
+        ("Career Stats", "Head-to-Head Comparison")
+    )
+    
+    # Year Range Slider
+    min_year = int(df['Year'].min())
+    max_year = int(df['Year'].max())
+    year_range = st.sidebar.slider(
+        "Select Year Range:",
+        min_value=min_year,
+        max_value=max_year,
+        value=(min_year, max_year),
+        step=1
+    )
+    
+    # Filter data by year range
+    df_filtered = df[(df['Year'] >= year_range[0]) & (df['Year'] <= year_range[1])].copy()
+    
+    # --- ANALYSIS LOGIC ---
+    
+    if analysis_mode == "Career Stats":
+        st.header("📊 Player Career Statistics")
+        
+        # Determine the default player for career stats
+        default_index = all_players.index("Roger Federer") if "Roger Federer" in all_players else 0
+        
+        selected_player = st.selectbox(
+            "Select a Player for Career Analysis:",
+            all_players,
+            index=default_index
+        )
+        
+        if selected_player:
+            plot_career_stats(df_filtered, selected_player)
 
-        choice = input("\n👉 Enter your choice (1-4): ").strip().lower()
-        if choice == 'q':
-            print("Goodbye! 👋")
-            break
+    elif analysis_mode == "Head-to-Head Comparison":
+        st.header("⚔️ Head-to-Head Matchup Comparison")
+        
+        col1, col2 = st.columns(2)
+        
+        # Determine default players for Head-to-Head
+        default_p1_idx = all_players.index("Roger Federer") if "Roger Federer" in all_players else 0
+        default_p2_idx = all_players.index("Rafael Nadal") if "Rafael Nadal" in all_players else (1 if len(all_players) > 1 else 0)
 
-        era_df = df.copy()
-        era_name = "All Time"
+        with col1:
+            player1 = st.selectbox("Player 1:", all_players, index=default_p1_idx)
+        
+        with col2:
+            player2 = st.selectbox("Player 2:", all_players, index=default_p2_idx)
 
-        if choice == '2':
-            era_df = df[(df['Year'] >= 2000) & (df['Year'] <= 2009)]
-            era_name = "The 2000s"
-        elif choice == '3':
-            era_df = df[(df['Year'] >= 2010) & (df['Year'] <= 2019)]
-            era_name = "The 2010s"
-        elif choice == '4':
-            era_df = df[df['Year'] >= 2020]
-            era_name = "The 2020s"
-        elif choice != '1':
-            print("⚠️ Invalid choice, defaulting to All Time.")
+        st.markdown("---")
 
-        # -------------------------
-        # STEP 2: TOP N
-        # -------------------------
-        try:
-            top_n = int(input("\n[Step 2] How many top players? "))
-        except ValueError:
-            print("⚠️ Invalid input → Using Top 5.")
-            top_n = 5
-
-        if era_df.empty:
-            print("⚠️ Selected era has no data. Using full dataset instead.")
-            era_df = df.copy()
-            era_name = "All Time (fallback)"
-
-        top_winners = era_df['Winner'].value_counts().head(top_n)
-        top_players_list = top_winners.index.tolist()
-
-        if not top_players_list:
-            print("⚠️ No winners found in the selected era. Exiting.")
-            return
-
-        # -------------------------
-        # STEP 3: SELECT PLAYER
-        # -------------------------
-        print(f"\nTop {top_n} players of {era_name}:")
-        for idx, p in enumerate(top_players_list):
-            print(f" {idx+1}. {p} ({top_winners[p]} wins)")
-
-        try:
-            p_choice = int(input(f"\n👉 Select a player (1–{top_n}): ")) - 1
-            selected_player = top_players_list[p_choice]
-        except:
-            print("⚠️ Invalid selection.")
-            continue
-
-        # Color theme for this player
-        p_color = PLAYER_COLORS.get(selected_player, DEFAULT_COLOR)
-
-        # -------------------------
-        # STEP 4: STATS
-        # -------------------------
-        print("\n" + "-"*30)
-        print(f"📊 REPORT FOR: {selected_player.upper()}")
-        print("-"*30)
-
-        matches = df[(df['Player_1'] == selected_player) |
-                     (df['Player_2'] == selected_player)]
-        wins = df[df['Winner'] == selected_player]
-
-        total = len(matches)
-        win_rate = (len(wins) / total * 100) if total > 0 else 0
-
-        print(f" • Total Career Matches: {total}")
-        print(f" • Total Career Wins: {len(wins)}")
-        print(f" • Career Win Rate: {win_rate:.1f}%")
-
-        # Best surface
-        surf = wins['Surface'].value_counts()
-        if not surf.empty:
-            print(f" • Best Surface: {surf.idxmax()} ({surf.max()} wins)")
-
-        # -------------------------
-        # STEP 5: VISUALS
-        # -------------------------
-        print("\n[Step 5] Visualization Options:")
-        print(" 1. View charts for selected player")
-        print(" 2. Compare two players")
-        print(" q. Skip charts")
-
-        vis_choice = input("\n👉 Enter choice: ").lower()
-
-        # -------------------------
-        # OPTION 1 — SINGLE PLAYER
-        # -------------------------
-        if vis_choice == "1":
-            print("Generating charts...")
-
-            # 1. BAR CHART — Wins by surface
-            plt.close('all')
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-
-            if surf.empty:
-                ax1.text(0.5, 0.5, "No surface win data", ha='center', va='center')
-                ax1.set_title(f"{selected_player} - Wins by Surface")
-                ax1.set_ylabel("Wins")
-            else:
-                sns.barplot(
-                    x=surf.index,
-                    y=surf.values,
-                    ax=ax1,
-                    color=p_color
-                )
-                ax1.set_title(f"{selected_player} - Wins by Surface")
-                ax1.set_ylabel("Wins")
-
-            # 2. LINE CHART — Wins per year
-            yearly = wins.groupby("Year").size()
-            if yearly.empty:
-                ax2.text(0.5, 0.5, "No yearly win data", ha='center', va='center')
-                ax2.set_title(f"{selected_player} - Wins per Year")
-                ax2.set_ylabel("Wins")
-            else:
-                sns.lineplot(
-                    x=yearly.index,
-                    y=yearly.values,
-                    ax=ax2,
-                    marker="o",
-                    color=p_color
-                )
-                ax2.set_title(f"{selected_player} - Wins per Year")
-                ax2.set_ylabel("Wins")
-
-            plt.tight_layout()
-            plt.show()
-
-            # -------------------------------------
-            # NEW GRAPH: PLAYER HEATMAP
-            # -------------------------------------
-            print("🔥 Generating Player Heatmap...")
-
-            if not wins.empty and {'Surface', 'Round'}.issubset(wins.columns):
-                heat = wins.groupby(["Surface", "Round"]).size().reset_index(name="Wins")
-                pivot = heat.pivot(index="Surface", columns="Round", values="Wins").fillna(0)
-                plt.figure(figsize=(10, 6))
-                sns.heatmap(pivot, cmap="YlOrRd", annot=True, fmt="g")
-                plt.title(f"{selected_player} – Heatmap (Surface × Round Wins)")
-                plt.show()
-            else:
-                print("⚠️ Not enough data to build the player heatmap (missing columns or no wins).")
-
-            # -------------------------------------
-            # GLOBAL ERA HEATMAP (original)
-            # -------------------------------------
-            if input("\n👉 Show Global Era Heatmap? (y/n): ").lower() == "y":
-                print("Generating heatmap...")
-                wins_per_year = df.groupby(['Year', 'Winner']).size().reset_index(name='Wins')
-                if wins_per_year.empty:
-                    print("⚠️ Not enough global data for heatmap.")
-                else:
-                    top3 = wins_per_year.sort_values(
-                        ['Year', 'Wins'], ascending=[True, False]
-                    ).groupby('Year').head(3)
-                    pivot_df = top3.pivot(index='Year', columns='Winner', values='Wins').fillna(0)
-                    plt.figure(figsize=(14, 10))
-                    sns.heatmap(pivot_df, cmap='YlOrRd', annot=True, fmt='g')
-                    plt.title("Top 3 Players by Wins (Yearly)")
-                    plt.show()
-
-        # -------------------------
-        # OPTION 2 — COMPARE TWO PLAYERS
-        # -------------------------
-        elif vis_choice == "2":
-            print("\n🎾 Enter name of second player to compare:")
-
-            # Input second player
-            player2 = input("👉 Player 2 name (must appear in dataset): ").strip()
-
-            # Check if valid
-            winners_unique = df['Winner'].unique()
-            if player2 not in winners_unique:
-                print("❌ Player not found in dataset.")
-                continue
-
-            print(f"\n📊 Comparing {selected_player} VS {player2}...")
-
-            # Colors
-            p1_color = PLAYER_COLORS.get(selected_player, DEFAULT_COLOR)
-            p2_color = PLAYER_COLORS.get(player2, "#e15759")
-
-            # Data
-            p1_wins = df[df['Winner'] == selected_player]
-            p2_wins = df[df['Winner'] == player2]
-
-            # --- Comparison Graphs ---
-            plt.close('all')
-            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-
-            # Wins by Surface (grouped bars)
-            s1 = p1_wins['Surface'].value_counts()
-            s2 = p2_wins['Surface'].value_counts()
-            surfaces = sorted(set(s1.index) | set(s2.index))
-
-            if not surfaces:
-                axes[0].text(0.5, 0.5, "No surface data", ha='center', va='center')
-                axes[0].set_title("Wins by Surface (Comparison)")
-                axes[0].set_ylabel("Wins")
-            else:
-                # create positions
-                x = range(len(surfaces))
-                width = 0.35
-                axes[0].bar([i - width/2 for i in x], [s1.get(s, 0) for s in surfaces],
-                            width=width, color=p1_color, label=selected_player)
-                axes[0].bar([i + width/2 for i in x], [s2.get(s, 0) for s in surfaces],
-                            width=width, color=p2_color, label=player2)
-                axes[0].set_xticks(x)
-                axes[0].set_xticklabels(surfaces, rotation=45)
-                axes[0].set_title("Wins by Surface (Comparison)")
-                axes[0].set_ylabel("Wins")
-                axes[0].legend()
-
-            # Wins per Year
-            y1 = p1_wins.groupby("Year").size()
-            y2 = p2_wins.groupby("Year").size()
-            if y1.empty and y2.empty:
-                axes[1].text(0.5, 0.5, "No yearly data", ha='center', va='center')
-                axes[1].set_title("Wins per Year (Comparison)")
-                axes[1].set_ylabel("Wins")
-            else:
-                if not y1.empty:
-                    sns.lineplot(x=y1.index, y=y1.values, marker="o", ax=axes[1], color=p1_color, label=selected_player)
-                if not y2.empty:
-                    sns.lineplot(x=y2.index, y=y2.values, marker="o", ax=axes[1], color=p2_color, label=player2)
-                axes[1].set_title("Wins per Year (Comparison)")
-                axes[1].set_ylabel("Wins")
-                axes[1].legend()
-
-            plt.tight_layout()
-            plt.show()
-
-            # Comparison Heatmap
-            print("🔥 Generating Comparison Heatmap...")
-
-            if {'Surface', 'Round'}.issubset(df.columns):
-                heat1 = p1_wins.groupby(["Surface", "Round"]).size().reset_index(name="P1")
-                heat2 = p2_wins.groupby(["Surface", "Round"]).size().reset_index(name="P2")
-                merged = pd.merge(heat1, heat2, on=["Surface", "Round"], how="outer").fillna(0)
-
-                # pivot P1 and P2
-                pivot_p1 = merged.pivot(index="Surface", columns="Round", values="P1").fillna(0)
-                pivot_p2 = merged.pivot(index="Surface", columns="Round", values="P2").fillna(0)
-
-                # align indexes/columns
-                all_surfaces = sorted(set(pivot_p1.index) | set(pivot_p2.index))
-                all_rounds = sorted(set(pivot_p1.columns) | set(pivot_p2.columns))
-
-                pivot_p1 = pivot_p1.reindex(index=all_surfaces, columns=all_rounds, fill_value=0)
-                pivot_p2 = pivot_p2.reindex(index=all_surfaces, columns=all_rounds, fill_value=0)
-
-                diff = pivot_p1 - pivot_p2
-
-                plt.figure(figsize=(10, 6))
-                sns.heatmap(diff, cmap="coolwarm", center=0, annot=True, fmt=".0f")
-                plt.title(f"{selected_player} vs {player2} – Heatmap (Difference in Wins)")
-                plt.show()
-            else:
-                print("⚠️ Not enough data to build comparison heatmap (missing 'Surface'/'Round' columns).")
-
-        # -------------------------
-        # SKIP VISUALS
-        # -------------------------
+        if player1 and player2 and player1 != player2:
+            plot_h2h_summary(df_filtered, player1, player2)
+            st.markdown("---")
+            plot_h2h_heatmap(df_filtered, player1, player2)
+        elif player1 == player2:
+            st.warning("Please select two different players for Head-to-Head comparison.")
         else:
-            print("Skipping charts...")
+            st.info("Select two players to begin the comparison.")
 
 
-# Run the program
 if __name__ == "__main__":
-    main()
+    main_app()
