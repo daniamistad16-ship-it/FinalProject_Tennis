@@ -48,6 +48,23 @@ def load_data():
         return None
 
 # -----------------------------------------
+# HELPER FUNCTION FOR STATS
+# -----------------------------------------
+def get_player_stats(df, player_name):
+    """Helper function to calculate key career stats for one player."""
+    player_matches = df[(df['Player_1'] == player_name) | (df['Player_2'] == player_name)].copy()
+    wins = (player_matches['Winner'] == player_name).sum()
+    total_matches = len(player_matches)
+    win_rate = (wins / total_matches) * 100 if total_matches > 0 else 0
+    
+    # Calculate wins by surface
+    surface_wins = player_matches[player_matches['Winner'] == player_name].groupby('Surface').size().reset_index(name='Wins')
+    surface_wins['Player'] = player_name
+    
+    return total_matches, win_rate, surface_wins
+
+
+# -----------------------------------------
 # PLOTTING FUNCTIONS
 # -----------------------------------------
 
@@ -100,22 +117,19 @@ def plot_annual_win_rate(df, player_name):
 def plot_career_stats(df, player_name):
     """Generates and displays career statistics for a selected player (Original and calls new trend)."""
     
-    player_matches = df[(df['Player_1'] == player_name) | (df['Player_2'] == player_name)].copy()
+    total_matches, win_rate, surface_wins_df = get_player_stats(df, player_name)
 
-    if player_matches.empty:
+    if total_matches == 0:
         st.info(f"No matches found for {player_name} in the selected time frame ({df['Year'].min()} - {df['Year'].max()}).")
         return
-
-    # Calculate overall win percentage
-    wins = (player_matches['Winner'] == player_name).sum()
-    total_matches = len(player_matches)
-    win_rate = (wins / total_matches) * 100 if total_matches > 0 else 0
-
+    
+    wins = (total_matches * win_rate / 100) # Calculate wins from total and rate
+    
     st.subheader(f"Summary Statistics for {player_name}")
     
     col_a, col_b = st.columns(2)
     col_a.metric(label="Total Matches Played", value=total_matches)
-    col_b.metric(label="Overall Win Rate", value=f"{win_rate:.1f}%", help=f"Total Wins: {wins}")
+    col_b.metric(label="Overall Win Rate", value=f"{win_rate:.1f}%", help=f"Total Wins: {wins:.0f}")
     
     st.markdown("---")
     
@@ -125,9 +139,9 @@ def plot_career_stats(df, player_name):
     st.markdown("---")
     st.subheader("Wins by Surface")
     
-    # Count wins by surface
-    surface_wins = player_matches[player_matches['Winner'] == player_name].groupby('Surface').size().sort_values(ascending=False)
-    
+    # Count wins by surface from helper function
+    surface_wins = surface_wins_df.set_index('Surface')['Wins']
+
     if not surface_wins.empty:
         fig, ax = plt.subplots(figsize=(8, 5))
         surface_wins.plot(kind='bar', ax=ax, color=get_player_color(player_name))
@@ -139,6 +153,80 @@ def plot_career_stats(df, player_name):
         st.pyplot(fig)
     else:
         st.info("No wins recorded in this range.")
+
+# -----------------------------------------
+# NEW COMPARISON FUNCTION
+# -----------------------------------------
+
+def plot_player_comparison(df, player1, player2):
+    """Generates and displays comparison statistics for two selected players."""
+    st.header(f"⚖️ Lifetime Career Comparison: {player1} vs {player2}")
+
+    # 1. Get stats for both players
+    total1, rate1, surface_wins1 = get_player_stats(df, player1)
+    total2, rate2, surface_wins2 = get_player_stats(df, player2)
+
+    # 2. Display summary metrics side-by-side
+    st.subheader("Overall Performance")
+    col_a, col_b = st.columns(2)
+    
+    # Player 1 Metrics
+    with col_a:
+        st.metric(
+            label=f"{player1} Total Matches Played", 
+            value=total1
+        )
+        st.metric(
+            label=f"{player1} Overall Win Rate", 
+            value=f"{rate1:.1f}%", 
+            delta=f"{rate1 - rate2:.1f}% Win Rate Difference" if total1 > 0 and total2 > 0 else None,
+            delta_color="normal" if rate1 > rate2 else ("inverse" if rate2 > rate1 else "off")
+        )
+    
+    # Player 2 Metrics
+    with col_b:
+        st.metric(
+            label=f"{player2} Total Matches Played", 
+            value=total2
+        )
+        st.metric(
+            label=f"{player2} Overall Win Rate", 
+            value=f"{rate2:.1f}%", 
+            delta=f"{rate2 - rate1:.1f}% Win Rate Difference" if total1 > 0 and total2 > 0 else None,
+            delta_color="normal" if rate2 > rate1 else ("inverse" if rate1 > rate2 else "off")
+        )
+        
+    st.markdown("---")
+
+    # 3. Surface Wins Comparison (Grouped Bar Chart)
+    st.subheader("Wins by Surface Comparison")
+    
+    # Combine dataframes
+    combined_surface_wins = pd.concat([surface_wins1, surface_wins2])
+    
+    if combined_surface_wins.empty:
+        st.info("No wins recorded for these players in the selected range.")
+        return
+
+    # Create the grouped bar chart using Matplotlib/Seaborn
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.barplot(
+        x='Surface', 
+        y='Wins', 
+        hue='Player', 
+        data=combined_surface_wins,
+        palette={player1: get_player_color(player1), player2: get_player_color(player2)},
+        ax=ax
+    )
+    
+    ax.set_title(f"Wins by Surface: {player1} vs {player2}", fontsize=14)
+    ax.set_ylabel("Number of Wins", fontsize=12)
+    ax.set_xlabel("Surface", fontsize=12)
+    ax.legend(title="Player")
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    st.pyplot(fig)
+
 
 def plot_h2h_trend(df, player1, player2):
     """Plots the cumulative head-to-head score over time."""
@@ -292,10 +380,10 @@ def main_app():
     # --- SIDEBAR (SELECTIONS) ---
     st.sidebar.header("⚙️ Analysis Settings")
     
-    # Analysis Mode Selector
+    # Analysis Mode Selector (UPDATED)
     analysis_mode = st.sidebar.radio(
         "Choose Analysis Type:",
-        ("Career Stats", "Head-to-Head Comparison")
+        ("Career Stats", "Head-to-Head Comparison", "Two-Player Lifetime Comparison")
     )
     
     # Year Range Slider
@@ -349,16 +437,38 @@ def main_app():
         if player1 and player2 and player1 != player2:
             plot_h2h_summary(df_filtered, player1, player2)
             st.markdown("---")
-            
-            # NEW CHART 2: Head-to-Head Trend
             plot_h2h_trend(df_filtered, player1, player2)
-
             st.markdown("---")
             plot_h2h_heatmap(df_filtered, player1, player2)
         elif player1 == player2:
             st.warning("Please select two different players for Head-to-Head comparison.")
         else:
             st.info("Select two players to begin the comparison.")
+
+    # NEW MODE: Two-Player Lifetime Comparison
+    elif analysis_mode == "Two-Player Lifetime Comparison":
+        st.header("⚖️ Compare Career Statistics")
+        
+        col1, col2 = st.columns(2)
+        
+        # Determine default players for comparison
+        default_p1_idx = all_players.index("Roger Federer") if "Roger Federer" in all_players else 0
+        default_p2_idx = all_players.index("Novak Djokovic") if "Novak Djokovic" in all_players else (1 if len(all_players) > 1 else 0)
+
+        with col1:
+            player1 = st.selectbox("Player 1 (Left Side):", all_players, key='comp1', index=default_p1_idx)
+        
+        with col2:
+            player2 = st.selectbox("Player 2 (Right Side):", all_players, key='comp2', index=default_p2_idx)
+
+        st.markdown("---")
+
+        if player1 and player2 and player1 != player2:
+            plot_player_comparison(df_filtered, player1, player2)
+        elif player1 == player2:
+            st.warning("Please select two different players for career comparison.")
+        else:
+            st.info("Select two players to compare their overall career stats.")
 
 
 if __name__ == "__main__":
